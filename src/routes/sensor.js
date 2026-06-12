@@ -6,9 +6,10 @@ const { sendTelegram, formatSensorAlert } = require('../services/telegram');
 
 const router = express.Router();
 
-// Cooldown notifikasi — hindari spam (dalam ms)
-const NOTIF_COOLDOWN = 5 * 60 * 1000; // 5 menit
-let lastNotifTime = 0;
+const NOTIF_COOLDOWN   = 5 * 60 * 1000; // 5 menit
+const ADMIN_ID         = '019e7995-1f71-7316-a5d1-831e16f81ef2';
+let lastNotifTime      = 0;
+let kondisiSebelumnya  = 'aman';
 
 // GET /api/sensor
 router.get('/', auth, async (req, res) => {
@@ -76,13 +77,8 @@ router.post('/', async (req, res) => {
             );
 
             if (tempMelebihi || tempKurang || humidMelebihi || humidKurang) {
-                if (selisihSuhu >= 3) {
-                    status  = 'warning';
-                    kondisi = 'kritis';
-                } else {
-                    status  = 'warning';
-                    kondisi = 'waspada';
-                }
+                status  = 'warning';
+                kondisi = selisihSuhu >= 3 ? 'kritis' : 'waspada';
             }
         }
 
@@ -134,31 +130,80 @@ router.post('/', async (req, res) => {
             console.log('[AUTO] Kipas dimatikan otomatis — kondisi AMAN');
         }
 
-        // ── NOTIFIKASI TELEGRAM ───────────────────────────────
-        if (kondisi !== 'aman') {
-            const now_ms = Date.now();
-            const cooldownSelesai = (now_ms - lastNotifTime) > NOTIF_COOLDOWN;
+        // ── NOTIFIKASI TELEGRAM + SIMPAN KE DB ───────────────
+        const kondisiBerubah  = kondisi !== kondisiSebelumnya;
+        const now_ms          = Date.now();
+        const cooldownSelesai = (now_ms - lastNotifTime) > NOTIF_COOLDOWN;
+        const waktu           = now.toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
 
-            if (cooldownSelesai) {
-                lastNotifTime = now_ms;
+        // Kirim notifikasi jika kondisi berubah atau cooldown selesai
+        if (kondisiBerubah || (kondisi !== 'aman' && cooldownSelesai)) {
 
-                const pesan = formatSensorAlert({
-                    temperature: Number(temperature),
-                    humidity:    Number(humidity),
-                    kondisi,
-                    threshold,
-                });
+            let title   = '';
+            let message = '';
+            let type    = 'info';
+            let pesanTelegram = '';
 
-                // Kirim async, tidak blokir response ke ESP32
-                sendTelegram(pesan).catch(err => {
-                    console.error('[Telegram] Gagal kirim notifikasi:', err.message);
-                });
+            if (kondisi === 'kritis') {
+                title         = 'Peringatan Kritis Gudang';
+                message       = `Suhu ${temperature}°C dan kelembaban ${humidity}% melebihi batas aman. Kipas dinyalakan otomatis. Waktu: ${waktu}`;
+                type          = 'critical';
+                pesanTelegram = formatSensorAlert({ temperature: Number(temperature), humidity: Number(humidity), kondisi, threshold });
 
-                console.log(`[Telegram] Notifikasi dikirim — kondisi: ${kondisi}`);
-            } else {
-                const sisaCooldown = Math.ceil((NOTIF_COOLDOWN - (now_ms - lastNotifTime)) / 1000);
-                console.log(`[Telegram] Cooldown aktif — sisa ${sisaCooldown} detik`);
+            } else if (kondisi === 'waspada') {
+                title         = 'Peringatan Gudang';
+                message       = `Suhu ${temperature}°C dan kelembaban ${humidity}% mendekati batas aman. Harap periksa kondisi gudang. Waktu: ${waktu}`;
+                type          = 'warning';
+                pesanTelegram = formatSensorAlert({ temperature: Number(temperature), humidity: Number(humidity), kondisi, threshold });
+
+            } else if (kondisi === 'aman' && kondisiBerubah) {
+                title         = 'Kondisi Gudang Normal';
+                message       = `Suhu ${temperature}°C dan kelembaban ${humidity}% kembali dalam batas aman. Waktu: ${waktu}`;
+                type          = 'info';
+                pesanTelegram =
+                    `✅ <b>KONDISI NORMAL — GudangSafe</b>\n\n` +
+                    `📍 Toko Bumi Jaya, Jember\n` +
+                    `🌡 Suhu: <b>${temperature}°C</b>\n` +
+                    `💧 Kelembaban: <b>${humidity}%</b>\n` +
+                    `✅ Status: <b>AMAN</b>\n` +
+                    `🕐 Waktu: ${waktu}`;
             }
+
+            if (title) {
+                // Simpan ke tabel notifications
+                try {
+                    await prisma.notifications.create({
+                        data: {
+                            id:         randomUUID(),
+                            user_id:    ADMIN_ID,
+                            title,
+                            message,
+                            type,
+                            is_read:    false,
+                            created_at: now,
+                            updated_at: now,
+                        }
+                    });
+                    console.log(`[Notifikasi] Tersimpan: ${title}`);
+                } catch (e) {
+                    console.error('[Notifikasi] Gagal simpan:', e.message);
+                }
+
+                // Kirim Telegram async
+                if (pesanTelegram) {
+                    lastNotifTime = now_ms;
+                    sendTelegram(pesanTelegram).catch(err => {
+                        console.error('[Telegram] Gagal kirim:', err.message);
+                    });
+                    console.log(`[Telegram] Notifikasi dikirim — kondisi: ${kondisi}`);
+                }
+            }
+
+            kondisiSebelumnya = kondisi;
+
+        } else if (kondisi !== 'aman') {
+            const sisaCooldown = Math.ceil((NOTIF_COOLDOWN - (now_ms - lastNotifTime)) / 1000);
+            console.log(`[Telegram] Cooldown aktif — sisa ${sisaCooldown} detik`);
         }
 
         console.log(`[SENSOR] Suhu: ${temperature}°C | Kelembaban: ${humidity}% | Status: ${kondisi}`);
