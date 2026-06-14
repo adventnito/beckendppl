@@ -58,10 +58,18 @@ router.post('/', auth, async (req, res) => {
 // PUT /api/users/:id
 router.put('/:id', auth, async (req, res) => {
     try {
-        const { name, email, role } = req.body;
+        const { name, email, role, password } = req.body;  // ← tambah password
+        
+        const updateData = { name, email, role };
+        
+        // Jika password diisi, hash dan update password
+        if (password && password.trim() !== '') {
+            updateData.password = await bcrypt.hash(password, 10);
+        }
+        
         const user = await prisma.users.update({
             where: { id: req.params.id },
-            data:  { name, email, role },
+            data: updateData,
         });
         res.json({ message: 'Karyawan berhasil diupdate', user });
     } catch (err) {

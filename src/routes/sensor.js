@@ -147,21 +147,20 @@ router.post('/', async (req, res) => {
             if (kondisi === 'kritis') {
                 title         = 'Peringatan Kritis Gudang';
                 message       = `Suhu ${temperature}°C dan kelembaban ${humidity}% melebihi batas aman. Kipas dinyalakan otomatis. Waktu: ${waktu}`;
-                type          = 'critical';
+                type          = 'temperature';
                 pesanTelegram = formatSensorAlert({ temperature: Number(temperature), humidity: Number(humidity), kondisi, threshold });
 
             } else if (kondisi === 'waspada') {
                 title         = 'Peringatan Gudang';
                 message       = `Suhu ${temperature}°C dan kelembaban ${humidity}% mendekati batas aman. Harap periksa kondisi gudang. Waktu: ${waktu}`;
-                type          = 'warning';
+                type          = 'temperature';
                 pesanTelegram = formatSensorAlert({ temperature: Number(temperature), humidity: Number(humidity), kondisi, threshold });
 
             } else if (kondisi === 'aman' && kondisiBerubah) {
                 title         = 'Kondisi Gudang Normal';
                 message       = `Suhu ${temperature}°C dan kelembaban ${humidity}% kembali dalam batas aman. Waktu: ${waktu}`;
-                type          = 'info';
-                pesanTelegram =
-                    `✅ <b>KONDISI NORMAL — GudangSafe</b>\n\n` +
+                type          = 'temperature';
+                pesanTelegram = `✅ <b>KONDISI NORMAL — GudangSafe</b>\n\n` +
                     `📍 Toko Bumi Jaya, Jember\n` +
                     `🌡 Suhu: <b>${temperature}°C</b>\n` +
                     `💧 Kelembaban: <b>${humidity}%</b>\n` +
@@ -170,7 +169,6 @@ router.post('/', async (req, res) => {
             }
 
             if (title) {
-                // Simpan ke tabel notifications
                 try {
                     await prisma.notifications.create({
                         data: {
@@ -189,7 +187,6 @@ router.post('/', async (req, res) => {
                     console.error('[Notifikasi] Gagal simpan:', e.message);
                 }
 
-                // Kirim Telegram async
                 if (pesanTelegram) {
                     lastNotifTime = now_ms;
                     sendTelegram(pesanTelegram).catch(err => {
@@ -207,6 +204,21 @@ router.post('/', async (req, res) => {
         }
 
         console.log(`[SENSOR] Suhu: ${temperature}°C | Kelembaban: ${humidity}% | Status: ${kondisi}`);
+
+        // ==========================================================
+        // 🔥 TAMBAHAN: KIRIM UPDATE REAL-TIME KE FRONTEND VIA SOCKET.IO
+        // ==========================================================
+        const io = req.app.get('io');
+        if (io) {
+            io.emit('sensor-update', {
+                temperature: Number(temperature),
+                humidity: Number(humidity),
+                status: kondisi,
+                timestamp: now
+            });
+            console.log(`[Socket.io] Real-time update terkirim: ${temperature}°C, ${humidity}%, ${kondisi}`);
+        }
+        // ==========================================================
 
         res.json({
             message: 'Data sensor tersimpan',

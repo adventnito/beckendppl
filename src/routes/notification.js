@@ -8,7 +8,6 @@ const router = express.Router();
 router.get('/', auth, async (req, res) => {
     try {
         const notifs = await prisma.notifications.findMany({
-            where:   { user_id: req.user.id },
             orderBy: { created_at: 'desc' },
             take: 50,
         });
